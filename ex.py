@@ -19,13 +19,15 @@ def detect_cards(image: np.ndarray):
     
 
     # Create trackbars
-    cv2.createTrackbar("Blur", "Processed", 1, 20, nothing)
-    cv2.createTrackbar("Threshold", "Processed", 0, 255, nothing)
+    cv2.createTrackbar("Blur", "Processed", 3, 20, nothing)
+    cv2.createTrackbar("Threshold", "Processed", 127, 255, nothing)
     cv2.createTrackbar("Block Size", "Processed", 1, 20, nothing)
     cv2.createTrackbar("Canny Low", "Processed", 80, 255, nothing)
     cv2.createTrackbar("Canny High", "Processed", 200, 255, nothing)
-    cv2.createTrackbar("Kernel", "Processed", 1, 20, nothing)
-    cv2.createTrackbar("Morph Iter", "Processed", 1, 5, nothing)
+    cv2.createTrackbar("Kernel", "Processed", 5, 20, nothing)
+    cv2.createTrackbar("Morph Iter", "Processed", 3, 5, nothing)
+
+    h, w = image.shape[:2]
 
     while True:
         # Get current trackbar positions
@@ -44,31 +46,32 @@ def detect_cards(image: np.ndarray):
         _, thresh = cv2.threshold(blurred, thresh_val, 255, cv2.THRESH_BINARY)
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel , iterations=morph_iter)
-        blurred = cv2.GaussianBlur(closed, (ksize, ksize), 0)
-        inverted = cv2.bitwise_not(blurred)
+        #blurred = cv2.GaussianBlur(closed, (ksize, ksize), 0)
+        inverted = cv2.bitwise_not(closed)
 
         edges = cv2.Canny(inverted, canny_low, canny_high)
 
         # Stack for visualization
         combined = np.hstack([blurred, thresh, closed, edges])
         
-        cv2.imshow("Processed", combined),
+
 
         # Find contours on the edge image
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         # Draw contours on a copy of the original image for visualization
 
-
         if contours:
 
-            
             contour_img = image.copy()
-            cv2.drawContours(contour_img, contours, -1, (0, 255, 0), 1)
+
+            for c in contours:
+                area = cv2.contourArea(c)
+               
+
+                cv2.drawContours(contour_img, [c], -1, (0, 255, 0), 1)
             # Stack the contour image with the previous combined view
             
-            cv2.imshow("Contour", contour_img)
-
-        combined = np.hstack([blurred, thresh, closed ,  inverted , edges])
+        combined = np.hstack([blurred, thresh, closed ,  inverted , edges , contour_img])
 
         cv2.imshow("Processed", combined)
         
@@ -77,6 +80,50 @@ def detect_cards(image: np.ndarray):
             break
 
     cv2.destroyAllWindows()
+
+def process_image(image : np.ndarray, params: DetectParams):
+    ksize = params.blur * 2 + 1  # kernel must be odd
+    thresh_val = params.threshold
+    canny_low = params.canny_low
+    canny_high = params.canny_high
+    #block_size = params.block_size * 2 + 1
+    kernel_size = params.kernel * 2 + 1
+    morph_iter = params.morph_iter
+    
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (ksize, ksize), 0)
+    _, thresh = cv2.threshold(blurred, thresh_val, 255, cv2.THRESH_BINARY)
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel , iterations=morph_iter)
+    #blurred = cv2.GaussianBlur(closed, (ksize, ksize), 0)
+    inverted = cv2.bitwise_not(closed)
+
+    edges = cv2.Canny(inverted, canny_low, canny_high)
+
+    # Stack for visualization
+    combined = np.hstack([blurred, thresh, closed, edges])
+    
+
+
+    # Find contours on the edge image
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Draw contours on a copy of the original image for visualization
+
+    if contours:
+
+        contour_img = image.copy()
+
+        for c in contours:
+            area = cv2.contourArea(c)
+            
+
+            cv2.drawContours(contour_img, [c], -1, (0, 255, 0), 1)
+        # Stack the contour image with the previous combined view
+        
+    combined = np.hstack([blurred, thresh, closed ,  inverted , edges])
+
+    return combined  , contour_img
+
 
 def read_image(image_path: str) -> np.ndarray:
     img = cv2.imread(image_path)

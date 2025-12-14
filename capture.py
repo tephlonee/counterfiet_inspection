@@ -9,6 +9,8 @@ import numpy as np
 import os
 import time
 
+from trackbar import DetectParams , create_trackbar, _read_params_from_trackbar
+
 def resize_for_window(img: np.ndarray, max_w: int = 1280, max_h: int = 720) -> np.ndarray:
     h, w = img.shape[:2]
     scale = min(max_w / float(w), max_h / float(h), 1.0)
@@ -52,20 +54,34 @@ auto_capture = False
 last_save = 0.0
 interval_s = 5.0
 
+
+
+
+create_trackbar()
+
+
+
 while camera.IsGrabbing():
     grabResult = camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
 
     if grabResult.GrabSucceeded():
+        params = _read_params_from_trackbar()
+
         # Access the image data
         image = converter.Convert(grabResult)
         img = image.GetArray()
         gray_frame = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
+        combined_img , contour_img = process_image(img , params)
+
         # Display the resulting frame
         resized = resize_for_window(img, 1280, 720)
         cv2.imshow('basler live feed', resized)
+
+        resized = resize_for_window(contour_img, 900, 500)
+        cv2.imshow('contour', resized)
         
-        #cv2.imshow('title', combined_img)
+        cv2.imshow('Tune', combined_img)
         k = cv2.waitKey(1)
         if k == 27:
             break
