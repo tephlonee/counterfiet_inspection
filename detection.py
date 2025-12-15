@@ -1,6 +1,51 @@
 import cv2
+import math
 import numpy as np
 from dataclasses import dataclass
+
+from collections import Counter
+
+def classify_chip(w):
+
+    if w < 40:
+        return 1
+
+    elif w > 40 and w < 70:
+        return 2
+    elif w > 70:
+        return 3
+
+
+def figure_from_array(arr):
+    counts = Counter(arr)
+
+    c1 = counts.get(1, 0)
+    c2 = counts.get(2, 0)
+    c3 = counts.get(3, 0)
+
+    # Only 1s
+    if c2 == 0 and c3 == 0:
+        return c1 - 1
+
+    # One 2 and some 1s
+    if c2 == 1 and c3 == 0:
+        return 3 + c1
+
+    # One 3 and some 1s
+    if c3 == 1 and c2 == 0:
+        return 6 + c1
+
+    raise ValueError("Invalid combination")
+
+
+def compute_output_board(dominant_color , figures):
+    if dominant_color == "yellow":
+        return int("".join(map(str, figures))) * 10
+    elif dominant_color == "blue":
+        return int("".join(map(str, figures)))
+    elif dominant_color == "red":
+        return math.prod(figures)
+    
 
 @dataclass
 class CardDetectionResult:
@@ -217,36 +262,100 @@ def detect_chips_in_card(card: CardDetectionResult) -> list[dict]:
             if area < 20 or area > 5000:
                 continue
             x, y, ww, hh = cv2.boundingRect(c)
+            if color == "yellow" and hh > 40:
+                continue
             cx = x + ww // 2
             cy = y + hh // 2
             chips.append({"center": (cx, cy), "bbox": (x, y, ww, hh), "color": color})
     return chips
 
+def _is_landscape(size: tuple) -> bool:
+    return size[0] > size[1]
+
+def _group_chips_by_x(chips: list[dict], tolerance: int = 100) -> list[list[dict]]:
+    if not chips:
+        return []
+    chips_sorted = sorted(chips, key=lambda c: c["bbox"][0])
+    groups = []
+    current = [chips_sorted[0]]
+    base_x = chips_sorted[0]["bbox"][0]
+    print("tolerance" , tolerance)
+    for c in chips_sorted[1:]:
+        x0 = c["bbox"][0]
+        print(x0 , base_x , abs(x0 - base_x))
+        if abs(x0 - base_x) <= tolerance:
+            current.append(c)
+        else:
+            groups.append(current)
+            current = [c]
+            base_x = x0
+    groups.append(current)
+    return groups
+
+def compute_unit_value(unit: list[dict]) -> int:
+
+    return 100
+
 def draw_overlay(image: np.ndarray, cards: list[CardDetectionResult], chips_per_card: list[list[dict]]) -> np.ndarray:
     out = image.copy()
     for idx, card in enumerate(cards):
+        #print(f"card{idx}: {card.size}", card.box)
         box = card.box.astype(np.int32)
         cv2.polylines(out, [box], True, (0, 255, 0), 2)
         wpx, hpx = card.size
         label = f"{wpx}x{hpx}px"
         p = tuple(box[0].astype(int))
+        rect = _order_points(card.box.astype(np.float32))
         cv2.putText(out, label, p, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        dst = np.array([[0, 0], [wpx - 1, 0], [wpx - 1, hpx - 1], [0, hpx - 1]], dtype=np.float32)
+        Minv = cv2.getPerspectiveTransform(dst, rect)
         for chip in chips_per_card[idx]:
-            x, y = chip["center"]
             x0, y0, ww, hh = chip["bbox"]
-            cv2.rectangle(out, (x0, y0), (x0 + ww, y0 + hh), (255, 0, 0), 2)
-            cv2.putText(out, chip["color"], (x0, max(0, y0 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+            corners = np.array([[x0, y0], [x0 + ww, y0], [x0 + ww, y0 + hh], [x0, y0 + hh]], dtype=np.float32)
+            corners = corners.reshape(1, -1, 2)
+            mapped = cv2.perspectiveTransform(corners, Minv).reshape(-1, 2).astype(np.int32)
+            cv2.polylines(out, [mapped], True, (255, 0, 0), 2)
+            pt_label = tuple(mapped[0])
+            print(chip["color"] , x0 , y0 , ww , hh)
+            cv2.putText(out, f"({ww}, {hh})", pt_label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
     return out
 
+
 def analyze_image(image: np.ndarray) -> dict:
-    cards = detect_cards_binary(image)
-    if not cards:
-        cards = detect_cards(image)
+    cards = detect_cards(image)
     chips_per_card = [detect_chips_in_card(c) for c in cards]
     overlay = draw_overlay(image, cards, chips_per_card)
     cards_info = []
+
+    total_value = 0
     for c, chips in zip(cards, chips_per_card):
-        cards_info.append({"size_px": c.size, "box": c.box.tolist(), "chips": chips})
+        units = _group_chips_by_x(chips, 150) if _is_landscape(c.size) else []
+        
+        print(f" units={units}")
+        
+        unit_values = [compute_unit_value(u) for u in units]
+
+        chip_distribution = [[classify_chip(c["bbox"][2]) for c in unit] for unit in units]
+        
+        print(chip_distribution)
+        
+        figure = [figure_from_array(chip_dist) for chip_dist in chip_distribution]
+    
+        print(figure)
+
+        figure = figure[::-1]
+
+        dominant_color = Counter([c["color"] for c in chips]).most_common(1)[0][0]
+
+        print(dominant_color)
+
+        total_value += compute_output_board(dominant_color, figure)
+
+
+        cards_info.append({"size_px": c.size, "box": c.box.tolist(), "chips": chips, "units": [{"chip_count": len(u), "value": v} for u, v in zip(units, unit_values)], "total_value": total_value})
+    
+    cv2.putText(overlay, f"Total Value: {total_value}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+    
     return {"cards": cards_info, "overlay": overlay}
 
 def analyze_image_with_params(image: np.ndarray, params: DetectParams) -> dict:
@@ -255,5 +364,8 @@ def analyze_image_with_params(image: np.ndarray, params: DetectParams) -> dict:
     overlay = draw_overlay(image, cards, chips_per_card)
     cards_info = []
     for c, chips in zip(cards, chips_per_card):
-        cards_info.append({"size_px": c.size, "box": c.box.tolist(), "chips": chips})
+        units = _group_chips_by_x(chips, 100) if _is_landscape(c.size) else []
+        unit_values = [compute_unit_value(u) for u in units]
+        total_value = sum(unit_values)
+        cards_info.append({"size_px": c.size, "box": c.box.tolist(), "chips": chips, "units": [{"chip_count": len(u), "value": v} for u, v in zip(units, unit_values)], "total_value": total_value})
     return {"cards": cards_info, "overlay": overlay, "debug": dbg}

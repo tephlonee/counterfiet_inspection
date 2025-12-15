@@ -38,6 +38,7 @@ def process_images(images_path: str, display: bool, save_dir: str | None):
             info.append(f"card{i}: size={size}, chips={chips}")
         print(f"{os.path.basename(p)} -> " + "; ".join(info))
         if display:
+            cv2.namedWindow("overlay", cv2.WINDOW_NORMAL)
             cv2.imshow("overlay", overlay)
             cv2.waitKey(1)
         if save_dir:
