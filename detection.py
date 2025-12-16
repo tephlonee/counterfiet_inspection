@@ -103,9 +103,9 @@ def _auto_canny(gray: np.ndarray) -> np.ndarray:
 def detect_cards(image: np.ndarray) -> list[CardDetectionResult]:
     h, w = image.shape[:2]
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    mask_dark = cv2.inRange(hsv, (0, 0, 0), (180, 80, 90))
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-    closed = cv2.morphologyEx(mask_dark, cv2.MORPH_CLOSE, kernel, iterations=2)
+    mask_dark = cv2.inRange(hsv, (0, 0, 0), (180, 100, 120))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    closed = cv2.morphologyEx(mask_dark, cv2.MORPH_CLOSE, kernel, iterations=5)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = _auto_canny(blur)
@@ -272,9 +272,25 @@ def detect_chips_in_card(card: CardDetectionResult) -> list[dict]:
 def _is_landscape(size: tuple) -> bool:
     return size[0] > size[1]
 
-def _group_chips_by_x(chips: list[dict], tolerance: int = 100) -> list[list[dict]]:
+def _group_chips_by_x(chips: list[dict]) -> list[list[dict]]:
     if not chips:
         return []
+    n = len(chips)
+    widths = [c["bbox"][2] for c in chips]
+    heights = [c["bbox"][3] for c in chips]
+    med_w = float(np.median(widths)) if widths else 0.0
+    med_h = float(np.median(heights)) if heights else 0.0
+    chips_sorted = sorted(chips, key=lambda c: c["bbox"][0])
+    x_positions = [c["bbox"][0] for c in chips_sorted]
+    x_diffs = [abs(x_positions[i] - x_positions[i - 1]) for i in range(1, len(x_positions))]
+    med_dx = float(np.median(x_diffs)) if x_diffs else med_w
+    base = max(50.0, med_w * 1.0, med_dx * 0.8)
+    colors = [c["color"] for c in chips]
+    dominant_color = max(set(colors), key=colors.count) if colors else "blue"
+    target_upper = 150.0 if dominant_color == "yellow" else 100.0
+    density = min(n / 20.0, 1.0)
+    tolerance = base + density * (target_upper - base)
+    tolerance = int(np.clip(tolerance, 50, 150))
     chips_sorted = sorted(chips, key=lambda c: c["bbox"][0])
     groups = []
     current = [chips_sorted[0]]
@@ -329,7 +345,7 @@ def analyze_image(image: np.ndarray) -> dict:
 
     total_value = 0
     for c, chips in zip(cards, chips_per_card):
-        units = _group_chips_by_x(chips, 150) if _is_landscape(c.size) else []
+        units = _group_chips_by_x(chips) if _is_landscape(c.size) else []
         
         print(f" units={units}")
         
@@ -364,7 +380,7 @@ def analyze_image_with_params(image: np.ndarray, params: DetectParams) -> dict:
     overlay = draw_overlay(image, cards, chips_per_card)
     cards_info = []
     for c, chips in zip(cards, chips_per_card):
-        units = _group_chips_by_x(chips, 100) if _is_landscape(c.size) else []
+        units = _group_chips_by_x(chips) if _is_landscape(c.size) else []
         unit_values = [compute_unit_value(u) for u in units]
         total_value = sum(unit_values)
         cards_info.append({"size_px": c.size, "box": c.box.tolist(), "chips": chips, "units": [{"chip_count": len(u), "value": v} for u, v in zip(units, unit_values)], "total_value": total_value})
