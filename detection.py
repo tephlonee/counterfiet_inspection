@@ -7,12 +7,12 @@ from collections import Counter
 
 def classify_chip(w):
 
-    if w < 40:
+    if w <= 45:
         return 1
 
-    elif w > 40 and w < 70:
+    elif w > 45 and w < 100:
         return 2
-    elif w > 70:
+    elif w >= 100:
         return 3
 
 
@@ -44,6 +44,7 @@ def compute_output_board(dominant_color , figures):
     elif dominant_color == "blue":
         return int("".join(map(str, figures)))
     elif dominant_color == "red":
+
         return math.prod(figures)
     
 
@@ -259,11 +260,14 @@ def detect_chips_in_card(card: CardDetectionResult) -> list[dict]:
         cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for c in cnts:
             area = cv2.contourArea(c)
-            if area < 20 or area > 5000:
+            if area < 20 or area > 6000:
+                print(f"chip area: {area}")
                 continue
             x, y, ww, hh = cv2.boundingRect(c)
             if color == "yellow" and hh > 40:
+                print(f"yellow chip: {x}, {y}, {ww}, {hh}")
                 continue
+
             cx = x + ww // 2
             cy = y + hh // 2
             chips.append({"center": (cx, cy), "bbox": (x, y, ww, hh), "color": color})
@@ -272,7 +276,7 @@ def detect_chips_in_card(card: CardDetectionResult) -> list[dict]:
 def _is_landscape(size: tuple) -> bool:
     return size[0] > size[1]
 
-def _group_chips_by_x(chips: list[dict]) -> list[list[dict]]:
+def _group_chips_by_x(chips: list[dict], card_size: tuple) -> list[list[dict]]:
     if not chips:
         return []
     n = len(chips)
@@ -288,7 +292,19 @@ def _group_chips_by_x(chips: list[dict]) -> list[list[dict]]:
     colors = [c["color"] for c in chips]
     dominant_color = max(set(colors), key=colors.count) if colors else "blue"
     target_upper = 150.0 if dominant_color == "yellow" else 100.0
-    density = min(n / 20.0, 1.0)
+    
+    # Calculate density based on card height and adjust for yellow boards
+    card_h = float(card_size[0])
+    effective_h = card_h
+    if dominant_color == "yellow":
+        effective_h = max(1.0, card_h - 100.0)
+    
+    # Density factor: arbitrary scaling to match previous logic range roughly
+    # Previous: n / 20.0
+    # New: proportional to n / effective_h
+    # Assuming standard height ~500? n/20 ~= n * 25 / 500
+    density = min((n * 50.0) / effective_h, 1.0)
+    
     tolerance = base + density * (target_upper - base)
     tolerance = int(np.clip(tolerance, 50, 150))
     chips_sorted = sorted(chips, key=lambda c: c["bbox"][0])
@@ -345,7 +361,7 @@ def analyze_image(image: np.ndarray) -> dict:
 
     total_value = 0
     for c, chips in zip(cards, chips_per_card):
-        units = _group_chips_by_x(chips) if _is_landscape(c.size) else []
+        units = _group_chips_by_x(chips , c.size) if _is_landscape(c.size) else []
         
         print(f" units={units}")
         
@@ -354,21 +370,27 @@ def analyze_image(image: np.ndarray) -> dict:
         chip_distribution = [[classify_chip(c["bbox"][2]) for c in unit] for unit in units]
         
         print(chip_distribution)
+
+        dominant_color = Counter([c["color"] for c in chips]).most_common(1)[0][0]
+
+        print(dominant_color)
         
         figure = [figure_from_array(chip_dist) for chip_dist in chip_distribution]
     
         print(figure)
 
-        figure = figure[::-1]
+        
 
-        dominant_color = Counter([c["color"] for c in chips]).most_common(1)[0][0]
+        if not figure:
+            continue
+        total = compute_output_board(dominant_color, figure)
 
-        print(dominant_color)
+        print(f"total={total}")
 
-        total_value += compute_output_board(dominant_color, figure)
+        total_value += total
 
 
-        cards_info.append({"size_px": c.size, "box": c.box.tolist(), "chips": chips, "units": [{"chip_count": len(u), "value": v} for u, v in zip(units, unit_values)], "total_value": total_value})
+        cards_info.append({"size_px": c.size, "box": c.box.tolist(), "chips": chips, "units": [{"chip_count": len(u), "value": v} for u, v in zip(units, unit_values)], "total_value": total})
     
     cv2.putText(overlay, f"Total Value: {total_value}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
     
@@ -380,7 +402,7 @@ def analyze_image_with_params(image: np.ndarray, params: DetectParams) -> dict:
     overlay = draw_overlay(image, cards, chips_per_card)
     cards_info = []
     for c, chips in zip(cards, chips_per_card):
-        units = _group_chips_by_x(chips) if _is_landscape(c.size) else []
+        units = _group_chips_by_x(chips, c.size) if _is_landscape(c.size) else []
         unit_values = [compute_unit_value(u) for u in units]
         total_value = sum(unit_values)
         cards_info.append({"size_px": c.size, "box": c.box.tolist(), "chips": chips, "units": [{"chip_count": len(u), "value": v} for u, v in zip(units, unit_values)], "total_value": total_value})
